@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Agent Monitor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23B49CFF' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='3' width='6' height='6' rx='1.5'/%3E%3Crect x='15' y='3' width='6' height='6' rx='1.5'/%3E%3Crect x='9' y='15' width='6' height='6' rx='1.5'/%3E%3Cpath d='M6 9v3h12V9M12 12v3'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar panel">
+    <div class="top-left">
+      <div class="brand">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#B49CFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="3" width="6" height="6" rx="1.5"/><rect x="9" y="15" width="6" height="6" rx="1.5"/><path d="M6 9v3h12V9M12 12v3"/></svg>
+        <span>Agent Monitor</span>
+      </div>
+      <span class="vsep" aria-hidden="true"></span>
+      <div class="run-info">
+        <span id="run-title" class="run-title">Waiting for a run…</span>
+        <span id="run-meta" class="run-meta mono"></span>
+      </div>
+      <span id="status-pill" class="pill" hidden><span class="dot"></span><span id="status-text"></span></span>
+    </div>
+    <div class="top-right">
+      <label class="picker"><span class="sr-only">Run</span>
+        <select id="run-picker" aria-label="Run"></select>
+      </label>
+      <button id="follow" class="btn" type="button" aria-pressed="true" title="Always show the newest run">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+        Follow latest
+      </button>
+      <a id="export" class="btn" href="#" download>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+        Export
+      </a>
+      <span id="conn" class="conn" role="status" hidden>reconnecting…</span>
+    </div>
+  </header>
+
+  <section id="empty" class="panel empty" hidden>
+    <h2>No runs yet</h2>
+    <p>Nothing has written events to <code>~/.agentmon/runs</code>. Pick one:</p>
+    <div class="empty-grid">
+      <div>
+        <h3>Monitor Claude Code</h3>
+        <p>Install the hooks once, then start any Claude Code session. It shows up here live.</p>
+        <pre class="code">agentmon install-hooks</pre>
+      </div>
+      <div>
+        <h3>Try the demo</h3>
+        <p>Replays a scripted multi-agent run so you can see every view.</p>
+        <pre class="code">agentmon demo</pre>
+      </div>
+      <div>
+        <h3>Send your own events</h3>
+        <p>Any agent can POST events (JSON) over HTTP.</p>
+        <pre class="code">curl -X POST localhost:8765/api/events \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"run_start","run":"my-run","title":"hello"}'</pre>
+      </div>
+    </div>
+  </section>
+
+  <div id="dash" class="dash" hidden>
+    <section id="metrics" class="metrics" aria-label="Run metrics"></section>
+
+    <div class="layout">
+      <section class="panel graph" aria-label="Execution graph">
+        <div class="graph-head">
+          <h2>Execution graph</h2>
+          <div class="tabs" role="tablist" aria-label="Graph view">
+            <button type="button" role="tab" id="tab-swim" data-tab="swim" aria-controls="panel-swim" aria-selected="true" tabindex="0">Swimlanes <span class="badge" id="badge-swim">0</span></button>
+            <button type="button" role="tab" id="tab-dag" data-tab="dag" aria-controls="panel-dag" aria-selected="false" tabindex="-1">DAG <span class="badge" id="badge-dag">0</span></button>
+            <button type="button" role="tab" id="tab-seq" data-tab="seq" aria-controls="panel-seq" aria-selected="false" tabindex="-1">Sequence <span class="badge" id="badge-seq">0</span></button>
+          </div>
+        </div>
+        <ul class="legend" id="legend" aria-label="Legend"></ul>
+        <div id="panel-swim" class="tabpanel" role="tabpanel" aria-labelledby="tab-swim"><div class="scroll" id="view-swim"></div></div>
+        <div id="panel-dag" class="tabpanel" role="tabpanel" aria-labelledby="tab-dag" hidden>
+          <div id="dag-stats" class="dag-stats"></div>
+          <div class="scroll" id="view-dag"></div>
+        </div>
+        <div id="panel-seq" class="tabpanel" role="tabpanel" aria-labelledby="tab-seq" hidden><div class="scroll" id="view-seq"></div></div>
+      </section>
+
+      <aside class="side">
+        <section class="panel inspector" aria-label="Step inspector"><div id="inspector"></div></section>
+        <section class="panel events" aria-label="Live events">
+          <div class="panel-head">
+            <h2>Live events</h2>
+            <div class="chips" id="chips" role="group" aria-label="Filter events"></div>
+          </div>
+          <ol id="events" class="event-list"></ol>
+        </section>
+        <section class="panel context" aria-label="Context windows">
+          <h2>Context windows</h2>
+          <div id="context"></div>
+        </section>
+      </aside>
+    </div>
+
+    <section class="panel timeline" aria-label="Timeline">
+      <div class="panel-head"><h2>Timeline</h2><span id="timeline-sub" class="muted small"></span></div>
+      <div id="timeline-body" class="scroll"></div>
+    </section>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

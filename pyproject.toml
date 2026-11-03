@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentmon"
+version = "0.1.0"
+description = "Live workflow monitor for AI agents: a web dashboard or a terminal UI over the same event stream"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "FugginOld" }]
+keywords = ["agents", "claude-code", "monitoring", "tui", "dashboard", "observability"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Topic :: Software Development :: Debuggers",
+]
+# The core (event schema, hook adapter, CLI) has no third-party dependencies,
+# so the Claude Code hook stays fast and installs anywhere.
+dependencies = []
+
+[project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn>=0.29"]
+tui = ["textual>=0.80"]
+all = ["agentmon[web,tui]"]
+dev = ["agentmon[all]", "pytest>=8", "httpx>=0.27", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+agentmon = "agentmon.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/FugginOld/agentmon"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentmon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
