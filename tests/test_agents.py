@@ -473,3 +473,70 @@ def test_step_titles_for_claude_tools_without_an_explicit_case():
     assert cc.step_title("Skill", {"skill": "tdd"}) == "Skill"  # no recognised argument: just the name
     assert cc.step_title("LS", {"path": "/a/b"}) == "LS · b"  # these used to show only the tool name
     assert cc.step_title("mcp_like", {"query": "weather in nyc"}) == "mcp_like · weather in nyc"
+
+
+# --------------------------------------------------------------------------- security-review regressions
+def test_hook_command_keeps_the_project_folder_off_sys_path(tmp_path):
+    """A cloned repo with an `agentmon/` folder must not run in place of the installed package."""
+    import os
+    import shlex
+    import subprocess
+    from pathlib import Path
+
+    decoy = tmp_path / "evilrepo" / "agentmon"
+    decoy.mkdir(parents=True)
+    (decoy / "__init__.py").write_text("raise SystemExit('HIJACKED')\n")
+    (decoy / "__main__.py").write_text("raise SystemExit('HIJACKED')\n")
+    command = shlex.split(cc.hook_command())[:-1] + ["--version"]  # same interpreter and guard flag, harmless action
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    out = subprocess.run(command, cwd=decoy.parent, env=env, capture_output=True, text=True)
+    assert "HIJACKED" not in out.stdout + out.stderr and out.stdout.startswith("agentmon "), out
+
+
+def test_guard_flag_is_part_of_every_installed_command(isolated_home):
+    agents.install("gemini")
+    agents.install("kimi")
+    gem = (isolated_home / "home" / ".gemini" / "settings.json").read_text()
+    kimi = (isolated_home / "home" / ".kimi" / "config.toml").read_text()
+    flag = "-P" if sys.version_info >= (3, 11) else "-I"
+    assert f" {flag} -m agentmon hook --agent gemini" in gem and f" {flag} -m agentmon hook --agent kimi" in kimi
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_backups_are_owner_only(isolated_home):
+    import os
+    import stat
+
+    path = isolated_home / "home" / ".qwen" / "settings.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"apiKey": "secret"}')
+    os.chmod(path, 0o644)
+    agents.install("qwen")
+    backup = path.with_suffix(".json.agentmon.bak")
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600 and "secret" in backup.read_text()
+    os.chmod(backup, 0o666)  # an older backup that was wider than it should be gets tightened
+    agents.install("qwen")
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+
+
+def test_project_settings_symlink_is_not_written_through(tmp_path, monkeypatch):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch")
+    project = tmp_path / "repo"
+    (project / ".claude").mkdir(parents=True)
+    try:
+        (project / ".claude" / "settings.json").symlink_to(victim)
+    except OSError:
+        pytest.skip("symlinks need privileges on this machine")
+    monkeypatch.chdir(project)
+    with pytest.raises(ValueError, match="symlink"):
+        cc.install("project")
+    assert victim.read_text() == "do not touch"
+    # the same layout in the user's own home is allowed: dotfile managers rely on it
+    home_claude = tmp_path / "home" / ".claude"
+    home_claude.mkdir(parents=True)
+    real = tmp_path / "dotfiles.json"
+    real.write_text("{}")
+    (home_claude / "settings.json").symlink_to(real)
+    cc.install("user")
+    assert "agentmon hook" in real.read_text()

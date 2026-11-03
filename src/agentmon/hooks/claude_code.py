@@ -303,6 +303,25 @@ def write_text_exact(path: Path, text: str) -> None:
         fh.write(text)
 
 
+def write_backup(path: Path) -> None:
+    """Copy ``path`` to ``<path>.agentmon.bak``, owner-only: settings files can hold API keys."""
+    backup = path.with_suffix(path.suffix + ".agentmon.bak")
+    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(path.read_bytes())
+    try:
+        os.chmod(backup, 0o600)  # a backup left by an earlier run keeps its old mode otherwise
+    except OSError:
+        pass
+
+
+def _refuse_links(path: Path) -> None:
+    """Project and local settings live in a repo that may not be yours: never write through its symlinks."""
+    for p in (path, path.parent, path.with_suffix(path.suffix + ".agentmon.bak")):
+        if p.is_symlink():
+            raise ValueError(f"{p} is a symlink; agentmon won't write through it in a project folder")
+
+
 def _load_settings(path: Path) -> tuple[dict, str, bool]:
     """(settings, newline, had_bom) of a JSON settings file; ({}, LF, False) when missing or empty."""
     text = read_text_exact(path) if path.exists() else ""
@@ -338,7 +357,10 @@ def settings_path(scope: str, project_dir: Path | None = None, target: Target = 
 
 def hook_command(agent: str = "claude") -> str:
     suffix = "" if agent == "claude" else f" --agent {agent}"
-    return f"{shlex.quote(sys.executable)} -m agentmon hook{suffix}"
+    # -P (3.11+) / -I (3.10) keep the working directory, i.e. the project being edited, off sys.path:
+    # otherwise an `agentmon/` folder inside a cloned repo would run instead of this package.
+    guard = "-P" if sys.version_info >= (3, 11) else "-I"
+    return f"{shlex.quote(sys.executable)} {guard} -m agentmon hook{suffix}"
 
 
 def _is_ours(entry: dict) -> bool:
@@ -363,10 +385,11 @@ def install(scope: str = "user", dry_run: bool = False, project_dir: Path | None
         entries.append(entry)
         hooks[event_name] = entries
     if not dry_run:
+        if scope != "user":
+            _refuse_links(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            backup = path.with_suffix(path.suffix + ".agentmon.bak")
-            backup.write_bytes(path.read_bytes())
+            write_backup(path)
         write_text_exact(path, ("﻿" if bom else "") + _dump_settings(settings, nl))
     return path, settings
 
@@ -390,5 +413,7 @@ def uninstall(scope: str = "user", dry_run: bool = False, project_dir: Path | No
     if not hooks:
         settings.pop("hooks", None)
     if not dry_run and removed:
+        if scope != "user":
+            _refuse_links(path)
         write_text_exact(path, ("﻿" if bom else "") + _dump_settings(settings, nl))
     return path, removed

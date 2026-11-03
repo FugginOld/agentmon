@@ -137,7 +137,7 @@ def kimi_install(dry_run: bool = False) -> tuple[Path, str]:
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            path.with_suffix(path.suffix + ".agentmon.bak").write_bytes(path.read_bytes())
+            cc.write_backup(path)
         cc.write_text_exact(path, new)
     return path, block
 
