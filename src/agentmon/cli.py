@@ -110,7 +110,7 @@ def cmd_emit(args) -> int:
             if not line.strip():
                 continue
             try:
-                ev = json.loads(line)
+                ev = events.loads(line)
                 if args.run and "run" not in ev:
                     ev["run"] = args.run
                 ev.setdefault("v", events.SCHEMA_VERSION)

@@ -12,7 +12,7 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from agentmon import demo, events, sink  # noqa: E402
+from agentmon import auth, demo, events, sink  # noqa: E402
 from agentmon.web import server  # noqa: E402
 
 
@@ -26,7 +26,7 @@ def _seed_demo() -> str:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(server.create_app())
+    return TestClient(server.create_app(), headers={"Authorization": f"Bearer {auth.load_or_create()}"})
 
 
 def test_index_and_static(client):

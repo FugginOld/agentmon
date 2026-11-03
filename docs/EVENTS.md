@@ -10,7 +10,7 @@ There are three ways to send events:
 |---|---|---|
 | Append to the run file | Your agent runs on the same machine | `examples/python_emitter.py` |
 | `agentmon emit` | Shell scripts, or piping JSONL from another process | `my-agent \| agentmon emit - --run job-42` |
-| `POST /api/events` | Agents on another host (requires `agentmon web`) | `examples/curl_events.sh` |
+| `POST /api/events` | Agents on another host (requires `agentmon web`; send `Authorization: Bearer <contents of ~/.agentmon/web-token>`) | `examples/curl_events.sh` |
 
 ## Common fields
 
@@ -22,6 +22,11 @@ There are three ways to send events:
 | `type` | **yes** | One of the types below |
 
 Unknown extra fields are kept in the file and ignored by the reducer, so you can add your own.
+
+Numbers must be finite: `NaN`, `Infinity` and `-Infinity` (which some JSON encoders emit) are rejected, as is a
+boolean `ts`. `POST /api/events` answers `400` with `{"error": …, "code": …}`, where `code` is one of
+`not_object`, `unknown_type`, `bad_run`, `missing_field`, `bad_ts`, `bad_status`, `bad_deps`, `non_finite`.
+The reply never echoes what you sent. New run files are created owner-only (`0600`, in a `0700` folder) on POSIX.
 
 ## Event types
 

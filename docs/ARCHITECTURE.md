@@ -42,6 +42,7 @@
 | `hooks/generic.py` | Gemini CLI and Kimi CLI payload → events (tool calls paired through `pairing`) |
 | `hooks/pairing.py` | Per-run state in `~/.agentmon/state/`: Pre/Post pairing without a tool-call id, Codex token totals |
 | `hooks/agents.py` | Registry: per-CLI translate, stdout rule, install targets, Kimi's TOML block |
+| `auth.py`, `web/auth.py` | The web token (`~/.agentmon/web-token`, owner-only) and the ASGI middleware that requires it on every route |
 | `llm.py` | `watch(client)`: instruments `chat.completions.create` of any OpenAI-compatible client |
 | `demo.py` | Scripted four-agent run used by `agentmon demo` and the tests |
 | `web/` | FastAPI server (`/api/stream` SSE, `/api/events` ingest) and static vanilla-JS frontend |

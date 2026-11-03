@@ -126,6 +126,7 @@ sink.append(events.make("step_start", "my-run", step="s1", agent="planner", titl
 my-agent --jsonl | agentmon emit - --run nightly           # pipe JSONL events
 agentmon emit step_end --run nightly --set step=s1         # one-off from a shell script
 curl -X POST localhost:8765/api/events -H 'content-type: application/json' \
+     -H "Authorization: Bearer $(cat ~/.agentmon/web-token)" \
      -d '{"run":"r","type":"note","text":"hi"}'                # over HTTP (needs `agentmon web`)
 ```
 There are runnable versions in [`examples/`](examples).
@@ -141,6 +142,13 @@ There are runnable versions in [`examples/`](examples).
 | `agentmon emit TYPE --run ID [--set k=v] [--json '{…}']` / `emit -` | Append events |
 | `agentmon demo [--speed N] [--instant] [--until SECONDS]` | Scripted sample run |
 | `agentmon runs` | List recorded runs |
+
+**Web access token.** `agentmon web` generates a random token in `~/.agentmon/web-token` (readable only by you) and
+prints a URL ending in `?token=…`; opening it sets a browser cookie and drops the token from the address bar.
+Without the token every route, including `POST /api/events`, answers `401`, so other users on the same machine can't
+read your prompts or write fake events. Scripts send `Authorization: Bearer $(cat ~/.agentmon/web-token)`. Delete the
+file to rotate the token. The token and your runs travel unencrypted if you bind a non-loopback `--host`, so prefer
+an SSH port-forward.
 
 Runs are plain JSONL files in `~/.agentmon/runs/` (set `AGENTMON_HOME` to move them). Copy one
 anywhere and open it with `agentmon tui --run path/to/file.jsonl`.

@@ -21,7 +21,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .. import events, paths, sink, tail
+from .. import auth, events, paths, sink, tail
+from .auth import TokenAuth
 
 STATIC_DIR = Path(__file__).parent / "static"
 POLL_INTERVAL = 0.25  # seconds between file polls
@@ -106,9 +107,13 @@ async def stream_snapshots(
 
 
 # ------------------------------------------------------------------------- app
-def create_app(run: str | None = None) -> FastAPI:
-    """Build the app. ``run`` pins the live stream to one run (id or path); default follows latest."""
+def create_app(run: str | None = None, token: str | None = None) -> FastAPI:
+    """Build the app. ``run`` pins the live stream to one run (id or path); default follows latest.
+
+    Every request needs ``token`` (default: the one in ``~/.agentmon/web-token``), see ``web/auth.py``.
+    """
     app = FastAPI(title="agentmon", docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(TokenAuth, token=token or auth.load_or_create())
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
@@ -163,8 +168,8 @@ def create_app(run: str | None = None) -> FastAPI:
         if len(body) > MAX_BODY:
             return JSONResponse({"error": "body too large"}, status_code=413)
         try:
-            payload = json.loads(body)
-        except ValueError:
+            payload = events.loads(body)
+        except ValueError:  # includes EventError for NaN / Infinity
             return JSONResponse({"error": "body is not valid JSON"}, status_code=400)
         items = payload if isinstance(payload, list) else [payload]
         if not items or len(items) > MAX_BATCH:
@@ -178,7 +183,8 @@ def create_app(run: str | None = None) -> FastAPI:
             try:
                 prepared.append(events.validate(item))
             except events.EventError as exc:
-                return JSONResponse({"error": f"event {i}: {exc}"}, status_code=400)
+                reason = events.REASONS.get(exc.code, "invalid event")
+                return JSONResponse({"error": f"event {i}: {reason}", "code": exc.code}, status_code=400)
         for item in prepared:  # validate everything first so a bad batch writes nothing
             sink.append(item)
         return JSONResponse({"accepted": len(prepared)})
@@ -188,11 +194,13 @@ def create_app(run: str | None = None) -> FastAPI:
 
 def serve(run: str | None = None, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> int:
     """Run the web UI until interrupted. Returns a process exit code."""
-    url = f"http://{'localhost' if host in LOOPBACK else host}:{port}/"
+    token = auth.load_or_create()
+    url = f"http://{'localhost' if host in LOOPBACK else host}:{port}/?token={token}"
     print(f"agentmon web UI: {url}")
+    print(f"API token for curl / emitters (Authorization: Bearer ...): {auth.token_path()}")
     if host not in LOOPBACK:
-        print(f"warning: listening on {host} - anyone who can reach this port can read your runs, "
-              "and POST /api/events lets them write events.")
+        print(f"warning: listening on {host} - the token and your runs cross the network unencrypted. "
+              "Prefer 127.0.0.1 with an SSH port-forward, or put a TLS proxy in front.")
     if open_browser:
         threading.Timer(0.8, webbrowser.open, args=(url,)).start()
     try:
