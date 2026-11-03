@@ -70,6 +70,50 @@ Claude down or change what it does.
 - `agentmon uninstall-hooks` removes only agentmon's entries.
 - `AGENTMON_DISABLE=1` turns capture off for one session.
 
+## Watch other agent CLIs
+
+Codex, Qwen Code, Gemini CLI and Kimi CLI have hooks like Claude Code's. Pick one with `--agent`:
+
+```bash
+agentmon install-hooks --agent codex      # also: qwen, gemini, kimi
+agentmon uninstall-hooks --agent codex
+```
+
+| `--agent` | Writes to | Scopes | Notes |
+|---|---|---|---|
+| `codex` | `~/.codex/hooks.json` | user, project | Codex skips new hooks until you approve them in `/hooks`. Token counts come from `PostModelRequest`. |
+| `qwen` | `~/.qwen/settings.json` | user, project | Same events as Claude Code, so subagents and failures are captured. |
+| `gemini` | `~/.gemini/settings.json` | user, project | Hooks are synchronous. No token counts (Gemini fires its model hook per streamed chunk). |
+| `kimi` | `~/.kimi/config.toml` | user | Adds one `# >>> agentmon … # <<< agentmon` block of `[[hooks]]`; Kimi's hooks are Beta. A top-level `hooks = []` is commented out while installed (uninstall restores it); a non-empty one is refused. If Kimi rewrites its config the block may be dropped: re-run `install-hooks`. Tool calls made inside a subagent show on the main agent. |
+
+These payloads are taken from each CLI's hooks reference, not from captured sessions. If a CLI changes
+its fields, steps may show up missing or oddly titled; hook errors are logged to `~/.agentmon/hook-errors.log`.
+On Windows, hook commands are written for a POSIX-style shell (Git Bash), as for Claude Code.
+
+## Watch API calls (OpenAI, DeepSeek, Kimi, Qwen, Gemini...)
+
+Wrap any OpenAI-compatible client. Every `chat.completions.create` call becomes a step with token usage:
+
+```python
+from openai import OpenAI
+from agentmon.llm import watch
+
+client = watch(OpenAI(base_url="https://api.deepseek.com", api_key=KEY), run="nightly", agent="coder", name="DeepSeek")
+client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": "hi"}])
+```
+
+| Provider | `base_url` |
+|---|---|
+| OpenAI | *(default)* |
+| DeepSeek | `https://api.deepseek.com` |
+| Kimi / Moonshot | `https://api.moonshot.ai/v1` |
+| Qwen / DashScope | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+
+Calls return exactly what the SDK returned, errors are re-raised unchanged, and API keys and error text are never
+written to the run file. Async clients are not monitored, and a streamed call only shows token counts if the
+provider sends usage.
+
 ## Watch any other agent
 
 Anything that can write a line of JSON can feed agentmon. See **[docs/EVENTS.md](docs/EVENTS.md)**.
@@ -92,8 +136,8 @@ There are runnable versions in [`examples/`](examples).
 |---|---|
 | `agentmon web [--run ID] [--port 8765] [--open]` | Web dashboard (follows the newest run by default) |
 | `agentmon tui [--run ID] [--view swim\|dag\|seq]` | Terminal UI |
-| `agentmon install-hooks [--scope user\|project\|local] [--dry-run]` | Connect Claude Code |
-| `agentmon uninstall-hooks [--scope …]` | Disconnect Claude Code |
+| `agentmon install-hooks [--agent claude\|codex\|qwen\|gemini\|kimi] [--scope user\|project\|local] [--dry-run]` | Connect an agent CLI (default: Claude Code) |
+| `agentmon uninstall-hooks [--agent …] [--scope …]` | Disconnect it |
 | `agentmon emit TYPE --run ID [--set k=v] [--json '{…}']` / `emit -` | Append events |
 | `agentmon demo [--speed N] [--instant] [--until SECONDS]` | Scripted sample run |
 | `agentmon runs` | List recorded runs |

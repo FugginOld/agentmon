@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import sys
 import time
 import traceback
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +74,16 @@ def step_title(tool: str, tool_input: Any) -> str:
         return f"WebSearch · {_short(ti.get('query'), 30)}"
     if tool in ("TodoWrite", "TaskCreate", "TaskUpdate"):
         return f"{tool}"
+    if tool == "apply_patch":  # Codex: the patch text is in tool_input.command
+        m = re.search(r"\*\*\* (?:Update|Add|Delete) File: (.+)", str(ti.get("command") or ""))
+        return f"apply_patch · {Path(m.group(1).strip()).name}" if m else tool
+    # Other CLIs name their tools differently (run_shell_command, ReadFile, ...): show the first useful argument.
+    for key in ("file_path", "absolute_path", "path"):
+        if ti.get(key):
+            return f"{tool} · {Path(str(ti[key])).name or '?'}"
+    for key in ("description", "command", "pattern", "query", "url"):
+        if ti.get(key):
+            return f"{tool} · {_short(ti[key], 30)}"
     return tool
 
 
@@ -154,8 +167,12 @@ def transcript_usage(path: str | None) -> dict | None:
 
 
 # --------------------------------------------------------------------------- mapping
-def translate(payload: dict, now: float | None = None) -> list[dict]:
-    """Map one Claude Code hook payload to zero or more agentmon events."""
+def translate(payload: dict, now: float | None = None, *, label: str = "claude-code",
+              agent_name: str = "Claude") -> list[dict]:
+    """Map one Claude Code hook payload to zero or more agentmon events.
+
+    Codex and Qwen Code send the same event names and fields, so they reuse this with their own label and name.
+    """
     name = payload.get("hook_event_name")
     run = payload.get("session_id")
     if not name or not run:
@@ -170,8 +187,8 @@ def translate(payload: dict, now: float | None = None) -> list[dict]:
     if name == "SessionStart":
         cwd = payload.get("cwd")
         title = payload.get("session_title") or (Path(cwd).name if cwd else None)
-        ev("run_start", title=title, cwd=cwd, source=f"claude-code:{payload.get('source', 'startup')}")
-        ev("agent_start", agent=MAIN, name="Claude", model=payload.get("model"))
+        ev("run_start", title=title, cwd=cwd, source=f"{label}:{payload.get('source', 'startup')}")
+        ev("agent_start", agent=MAIN, name=agent_name, model=payload.get("model"))
     elif name == "UserPromptSubmit":
         prompt = payload.get("prompt") or ""
         sid = f"prompt-{payload.get('prompt_id') or int(ts * 1000)}"
@@ -220,15 +237,17 @@ def translate(payload: dict, now: float | None = None) -> list[dict]:
     return out
 
 
-def handle_stdin(stream=None) -> int:
-    """Entry point for ``agentmon hook``. Always returns 0 and never writes to stdout."""
-    if os.environ.get("AGENTMON_DISABLE"):
-        return 0
+def run_hook(translate_fn: Callable[[dict], list[dict]], stream=None, json_stdout: bool = False) -> int:
+    """Read one hook payload, append its events, return 0. Never raises.
+
+    stdout stays empty, except ``{}`` for CLIs that insist on JSON from every hook.
+    """
     try:
-        raw = (stream or sys.stdin).read()
-        payload = json.loads(raw) if raw.strip() else {}
-        for event in translate(payload):
-            sink.append(event)
+        if not os.environ.get("AGENTMON_DISABLE"):
+            raw = (stream or sys.stdin).read()
+            payload = json.loads(raw) if raw.strip() else {}
+            for event in translate_fn(payload):
+                sink.append(event)
     except Exception:  # noqa: BLE001 – a monitor must never break the agent
         try:
             log = paths.home() / "hook-errors.log"
@@ -237,55 +256,129 @@ def handle_stdin(stream=None) -> int:
                 fh.write(f"--- {events.now_iso()}\n{traceback.format_exc()}\n")
         except OSError:
             pass
+    if json_stdout:
+        try:
+            sys.stdout.write("{}")
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001 – closed pipe, no stdout...
+            try:  # keep the interpreter's exit flush from failing too
+                sys.stdout = open(os.devnull, "w")  # noqa: SIM115
+            except OSError:
+                pass
     return 0
 
 
+def handle_stdin(stream=None) -> int:
+    """Entry point for ``agentmon hook``. Always returns 0 and never writes to stdout."""
+    return run_hook(translate, stream)
+
+
 # --------------------------------------------------------------------------- install
-def settings_path(scope: str, project_dir: Path | None = None) -> Path:
+@dataclass(frozen=True)
+class Target:
+    """Where one CLI keeps its hook settings, and how it wants hooks registered."""
+
+    events: dict[str, bool]  # event -> registered asynchronously?
+    agent: str = "claude"
+    dirname: str = ".claude"
+    filename: str = "settings.json"
+    local_filename: str | None = "settings.local.json"
+    tool_events: frozenset = TOOL_EVENTS
+    matcher: str | None = "*"  # None: leave the matcher out so the hook runs for every tool
+    timeout: int = 10  # the unit is the CLI's own (Gemini: milliseconds)
+    timeouts: dict[str, int] = field(default_factory=dict)  # per-event overrides
+
+
+CLAUDE = Target(events=HOOK_EVENTS)
+
+
+def read_text_exact(path: Path) -> str:
+    """UTF-8 and the file's own line endings (the locale codec and universal newlines would corrupt both)."""
+    with open(path, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def write_text_exact(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
+
+
+def _load_settings(path: Path) -> tuple[dict, str, bool]:
+    """(settings, newline, had_bom) of a JSON settings file; ({}, LF, False) when missing or empty."""
+    text = read_text_exact(path) if path.exists() else ""
+    bom = text.startswith("﻿")
+    text = text[1:] if bom else text
+    nl = "\r\n" if "\r\n" in text else "\n"
+    if not text.strip():
+        return {}, nl, bom
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"{path} is not plain JSON ({exc}); agentmon won't touch it. Fix it or remove any comments first.") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} does not hold a JSON object")
+    return data, nl, bom
+
+
+def _check_hooks(hooks: Any, path: Path) -> None:
+    if not isinstance(hooks, dict) or any(not isinstance(v, list) for v in hooks.values()):
+        raise ValueError(f"{path}: 'hooks' must be an object mapping event names to lists; agentmon won't touch it")
+
+
+def _dump_settings(settings: dict, nl: str) -> str:
+    return json.dumps(settings, indent=2, ensure_ascii=False).replace("\n", nl) + nl
+
+
+def settings_path(scope: str, project_dir: Path | None = None, target: Target = CLAUDE) -> Path:
     if scope == "user":
-        return Path.home() / ".claude" / "settings.json"
+        return Path.home() / target.dirname / target.filename
     base = project_dir or Path.cwd()
-    return base / ".claude" / ("settings.local.json" if scope == "local" else "settings.json")
+    return base / target.dirname / (target.local_filename if scope == "local" and target.local_filename else target.filename)
 
 
-def hook_command() -> str:
-    return f"{shlex.quote(sys.executable)} -m agentmon hook"
+def hook_command(agent: str = "claude") -> str:
+    suffix = "" if agent == "claude" else f" --agent {agent}"
+    return f"{shlex.quote(sys.executable)} -m agentmon hook{suffix}"
 
 
 def _is_ours(entry: dict) -> bool:
     return any(MARKER in str(h.get("command", "")) for h in entry.get("hooks", []) if isinstance(h, dict))
 
 
-def install(scope: str = "user", dry_run: bool = False, project_dir: Path | None = None) -> tuple[Path, dict]:
-    path = settings_path(scope, project_dir)
-    settings = json.loads(path.read_text()) if path.exists() and path.read_text().strip() else {}
+def install(scope: str = "user", dry_run: bool = False, project_dir: Path | None = None,
+            target: Target = CLAUDE) -> tuple[Path, dict]:
+    path = settings_path(scope, project_dir, target)
+    settings, nl, bom = _load_settings(path)
     hooks = settings.setdefault("hooks", {})
-    command = hook_command()
-    for event_name, is_async in HOOK_EVENTS.items():
+    _check_hooks(hooks, path)
+    command = hook_command(target.agent)
+    for event_name, is_async in target.events.items():
         entries = [e for e in hooks.get(event_name, []) if not (isinstance(e, dict) and _is_ours(e))]
-        hook = {"type": "command", "command": command, "timeout": 10}
+        hook = {"type": "command", "command": command, "timeout": target.timeouts.get(event_name, target.timeout)}
         if is_async:
             hook["async"] = True
         entry: dict[str, Any] = {"hooks": [hook]}
-        if event_name in TOOL_EVENTS:
-            entry["matcher"] = "*"
+        if target.matcher and event_name in target.tool_events:
+            entry["matcher"] = target.matcher
         entries.append(entry)
         hooks[event_name] = entries
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             backup = path.with_suffix(path.suffix + ".agentmon.bak")
-            backup.write_text(path.read_text())
-        path.write_text(json.dumps(settings, indent=2) + "\n")
+            backup.write_bytes(path.read_bytes())
+        write_text_exact(path, ("﻿" if bom else "") + _dump_settings(settings, nl))
     return path, settings
 
 
-def uninstall(scope: str = "user", dry_run: bool = False, project_dir: Path | None = None) -> tuple[Path, int]:
-    path = settings_path(scope, project_dir)
+def uninstall(scope: str = "user", dry_run: bool = False, project_dir: Path | None = None,
+              target: Target = CLAUDE) -> tuple[Path, int]:
+    path = settings_path(scope, project_dir, target)
     if not path.exists():
         return path, 0
-    settings = json.loads(path.read_text() or "{}")
+    settings, nl, bom = _load_settings(path)
     hooks = settings.get("hooks", {})
+    _check_hooks(hooks, path)
     removed = 0
     for event_name in list(hooks):
         kept = [e for e in hooks[event_name] if not (isinstance(e, dict) and _is_ours(e))]
@@ -297,5 +390,5 @@ def uninstall(scope: str = "user", dry_run: bool = False, project_dir: Path | No
     if not hooks:
         settings.pop("hooks", None)
     if not dry_run and removed:
-        path.write_text(json.dumps(settings, indent=2) + "\n")
+        write_text_exact(path, ("﻿" if bom else "") + _dump_settings(settings, nl))
     return path, removed

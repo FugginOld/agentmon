@@ -25,7 +25,10 @@ Set `AGENTMON_HOME=/tmp/am` to keep test runs out of `~/.agentmon`.
 - UI code renders only from `Run.snapshot()`. If a UI needs new data, add it to the
   snapshot (and a test) rather than reaching into `Run` directly.
 - New event fields must be optional and documented in `docs/EVENTS.md`.
-- The hook must never write to stdout or exit non-zero.
+- The hook must never exit non-zero, and writes nothing to stdout, except exactly `{}` for CLIs that parse
+  hook output as JSON (`agents.JSON_STDOUT`: Codex, Gemini). Kimi injects non-empty stdout into the model's context.
+- Tests must not touch the real home directory: `tests/conftest.py` redirects `HOME` and `USERPROFILE`
+  (`Path.home()` reads the latter on Windows). A new installer needs a test that proves it writes under the fake home.
 
 ## Layout
 ```

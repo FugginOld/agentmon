@@ -2,7 +2,7 @@
 
     agentmon web            open the web dashboard (needs agentmon[web])
     agentmon tui            open the terminal UI   (needs agentmon[tui])
-    agentmon install-hooks  stream Claude Code sessions into agentmon
+    agentmon install-hooks  stream Claude Code / Codex / Qwen / Gemini / Kimi sessions into agentmon
     agentmon emit ...       append events from any agent / shell script
     agentmon demo           replay a sample multi-agent run
     agentmon runs           list recorded runs
@@ -15,6 +15,8 @@ import json
 import sys
 
 from . import __version__, fmt, paths
+
+AGENTS = ("claude", "codex", "qwen", "gemini", "kimi")  # same as hooks.agents.AGENTS; kept here so --help stays import-free
 
 WEB_HINT = "The web UI isn't installed. Install it with:  pipx install 'agentmon[web]'  (or pip install 'agentmon[web]')"
 TUI_HINT = "The terminal UI isn't installed. Install it with:  pipx install 'agentmon[tui]'  (or pip install 'agentmon[tui]')"
@@ -50,28 +52,51 @@ def cmd_tui(args) -> int:
 
 
 def cmd_hook(args) -> int:
-    from .hooks.claude_code import handle_stdin
+    from .hooks.agents import handle
 
-    return handle_stdin()
+    return handle(args.agent)
+
+
+def _scope_ok(args) -> bool:
+    from .hooks.agents import DISPLAY, SCOPES
+
+    if args.scope in SCOPES[args.agent]:
+        return True
+    print(f"{DISPLAY[args.agent]} has no {args.scope!r} scope (use: {', '.join(SCOPES[args.agent])})", file=sys.stderr)
+    return False
 
 
 def cmd_install_hooks(args) -> int:
-    from .hooks import claude_code
+    from .hooks import agents
 
-    path, settings = claude_code.install(scope=args.scope, dry_run=args.dry_run)
+    if not _scope_ok(args):
+        return 2
+    try:
+        path, preview, count = agents.install(args.agent, args.scope, args.dry_run)
+    except (ValueError, OSError) as exc:
+        print(f"agentmon: {exc}", file=sys.stderr)
+        return 2
     if args.dry_run:
-        print(json.dumps({"hooks": settings.get("hooks", {})}, indent=2))
+        print(preview)
         print(f"\n(dry run) would update {path}")
     else:
-        print(f"Installed agentmon hooks for {len(claude_code.HOOK_EVENTS)} Claude Code events in {path}")
-        print("New Claude Code sessions will appear in `agentmon web` / `agentmon tui`.")
+        print(f"Installed agentmon hooks for {count} {agents.DISPLAY[args.agent]} events in {path}")
+        if args.agent == "codex":
+            print("Codex skips new hooks until you trust them: open /hooks in Codex and approve agentmon's.")
+        print(f"New {agents.DISPLAY[args.agent]} sessions will appear in `agentmon web` / `agentmon tui`.")
     return 0
 
 
 def cmd_uninstall_hooks(args) -> int:
-    from .hooks import claude_code
+    from .hooks import agents
 
-    path, removed = claude_code.uninstall(scope=args.scope, dry_run=args.dry_run)
+    if not _scope_ok(args):
+        return 2
+    try:
+        path, removed = agents.uninstall(args.agent, args.scope, args.dry_run)
+    except (ValueError, OSError) as exc:
+        print(f"agentmon: {exc}", file=sys.stderr)
+        return 2
     print(f"Removed {removed} agentmon hook entr{'y' if removed == 1 else 'ies'} from {path}")
     return 0
 
@@ -151,14 +176,17 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--view", choices=["swim", "dag", "seq"], default="swim")
     t.set_defaults(func=cmd_tui)
 
-    h = sub.add_parser("hook", help="Claude Code hook entry point (reads the payload on stdin)")
+    h = sub.add_parser("hook", help="hook entry point for agent CLIs (reads the payload on stdin)")
+    h.add_argument("--agent", choices=AGENTS, default="claude")
     h.set_defaults(func=cmd_hook)
 
-    for name, func, helptext in (("install-hooks", cmd_install_hooks, "register agentmon hooks with Claude Code"),
-                                 ("uninstall-hooks", cmd_uninstall_hooks, "remove agentmon hooks from Claude Code")):
+    for name, func, helptext in (("install-hooks", cmd_install_hooks, "register agentmon hooks with an agent CLI"),
+                                 ("uninstall-hooks", cmd_uninstall_hooks, "remove agentmon hooks from an agent CLI")):
         ih = sub.add_parser(name, help=helptext)
+        ih.add_argument("--agent", choices=AGENTS, default="claude", help="which CLI to hook (default: claude)")
         ih.add_argument("--scope", choices=["user", "project", "local"], default="user",
-                        help="user: ~/.claude/settings.json · project: .claude/settings.json · local: .claude/settings.local.json")
+                        help="user: the CLI's home config · project: this repo's config · local: claude only, "
+                             "git-ignored (kimi: user only)")
         ih.add_argument("--dry-run", action="store_true")
         ih.set_defaults(func=func)
 

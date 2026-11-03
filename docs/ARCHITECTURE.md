@@ -38,7 +38,11 @@
 | `tail.py` | `RunWatcher` (incremental tail that handles partial lines and truncation), `list_runs`, `resolve` |
 | `store.py` | `Run` reducer, metrics, focus step, `snapshot()` |
 | `layout.py` | Swimlanes, DAG plus critical path, sequence, timeline |
-| `hooks/claude_code.py` | Hook payload → events, transcript token usage, `install`/`uninstall` |
+| `hooks/claude_code.py` | Hook payload → events, transcript token usage, `install`/`uninstall` for any JSON-settings CLI (`Target`); also serves Codex and Qwen Code, which send the same payloads |
+| `hooks/generic.py` | Gemini CLI and Kimi CLI payload → events (tool calls paired through `pairing`) |
+| `hooks/pairing.py` | Per-run state in `~/.agentmon/state/`: Pre/Post pairing without a tool-call id, Codex token totals |
+| `hooks/agents.py` | Registry: per-CLI translate, stdout rule, install targets, Kimi's TOML block |
+| `llm.py` | `watch(client)`: instruments `chat.completions.create` of any OpenAI-compatible client |
 | `demo.py` | Scripted four-agent run used by `agentmon demo` and the tests |
 | `web/` | FastAPI server (`/api/stream` SSE, `/api/events` ingest) and static vanilla-JS frontend |
 | `tui/` | Textual app plus pure `render.py` text renderers |
